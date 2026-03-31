@@ -18,10 +18,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Config
-GROQ_API_KEY = os.environ.get(
-    "GROQ_API_KEY",
-    "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",
-)
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 WHISPER_MODEL = "whisper-large-v3-turbo"
 TRANSCRIPTIONS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "transcriptions")
 os.makedirs(TRANSCRIPTIONS_DIR, exist_ok=True)

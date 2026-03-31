@@ -14,13 +14,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Twilio config
-TWILIO_SID = "AC2df6900d836269f47"
-TWILIO_TOKEN = "35112b7b9a8962d06127b"
+TWILIO_SID = os.environ.get("TWILIO_SID", "")
+TWILIO_TOKEN = os.environ.get("TWILIO_TOKEN", "")
 WHISPER_MODEL = "whisper-large-v3-turbo"
-GROQ_API_KEY = os.environ.get(
-    "GROQ_API_KEY",
-    "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",
-)
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
