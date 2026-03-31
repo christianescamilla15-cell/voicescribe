@@ -104,14 +104,9 @@ async def whatsapp_webhook(
             logger.error("WhatsApp voice error: %s", e)
             response_text = f"Error: {e}"
 
-    # Case 2: Text message
-    elif Body.strip():
-        save_transcription(Body.strip(), source="whatsapp-text")
-        response_text = f"Guardado: {Body.strip()[:100]}"
-        logger.info("WhatsApp text saved: %s", Body[:100])
-
-    # Case 3: Document (PDF, Word, TXT, images)
-    elif num_media > 0 and MediaUrl0:
+    # Case 2: Document (PDF, Word, TXT, images) — check BEFORE text since PDFs send filename as Body
+    elif num_media > 0 and MediaUrl0 and "audio" not in (MediaContentType0 or ""):
+        content_type = MediaContentType0 or ""
         content_type = MediaContentType0 or ""
         try:
             file_bytes = download_twilio_media(MediaUrl0)
@@ -177,6 +172,12 @@ async def whatsapp_webhook(
         except Exception as e:
             logger.error("WhatsApp file error: %s", e)
             response_text = f"Error procesando archivo: {e}"
+
+    # Case 3: Text message
+    elif Body.strip():
+        save_transcription(Body.strip(), source="whatsapp-text")
+        response_text = f"Guardado: {Body.strip()[:100]}"
+        logger.info("WhatsApp text saved: %s", Body[:100])
 
     else:
         response_text = "Envia una nota de voz o texto para transcribir."
