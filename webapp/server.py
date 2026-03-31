@@ -198,6 +198,22 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
         logger.info("WS disconnected: session=%s", session_id)
 
 
+@app.post("/api/transcribe-text")
+async def transcribe_text_endpoint(data: dict):
+    """Receive transcription text directly (from Android app)."""
+    text = data.get("text", "")
+    source = data.get("source", "call")
+    session_id = data.get("session_id", "call")
+
+    if text:
+        save_to_files(text, source, session_id)
+        entry = {"text": text, "source": source, "timestamp": datetime.now().isoformat()}
+        sessions.setdefault(session_id, []).append(entry)
+        await broadcast_to_session(session_id, {"type": "transcription", **entry})
+
+    return {"status": "ok", "text": text}
+
+
 # ── WhatsApp webhook ──
 from whatsapp_handler import router as whatsapp_router
 app.include_router(whatsapp_router, prefix="/api")
