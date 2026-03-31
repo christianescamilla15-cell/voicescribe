@@ -1,4 +1,4 @@
-"""WhatsApp webhook handler for Twilio — receives voice notes, transcribes with Groq Whisper."""
+"""WhatsApp webhook handler for Twilio — receives voice notes, files, transcribes with Groq Whisper."""
 import os
 import io
 import logging
@@ -8,6 +8,18 @@ from fastapi import APIRouter, Form, Response
 from typing import Optional
 
 from groq import Groq
+
+try:
+    from PyPDF2 import PdfReader
+    HAS_PDF = True
+except ImportError:
+    HAS_PDF = False
+
+try:
+    from docx import Document as DocxDocument
+    HAS_DOCX = True
+except ImportError:
+    HAS_DOCX = False
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +110,73 @@ async def whatsapp_webhook(
         response_text = f"Guardado: {Body.strip()[:100]}"
         logger.info("WhatsApp text saved: %s", Body[:100])
 
-    # Case 3: Other media (image, doc, etc)
-    elif num_media > 0:
-        response_text = "Solo proceso notas de voz y texto por ahora."
+    # Case 3: Document (PDF, Word, TXT, images)
+    elif num_media > 0 and MediaUrl0:
+        content_type = MediaContentType0 or ""
+        try:
+            file_bytes = download_twilio_media(MediaUrl0)
+            extracted = ""
+            file_type = "unknown"
+
+            # PDF
+            if "pdf" in content_type:
+                file_type = "pdf"
+                if HAS_PDF:
+                    reader = PdfReader(io.BytesIO(file_bytes))
+                    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
+                else:
+                    extracted = "[PyPDF2 not installed — PDF received but cannot extract]"
+
+            # Word (.docx)
+            elif "wordprocessingml" in content_type or "msword" in content_type:
+                file_type = "docx"
+                if HAS_DOCX:
+                    doc = DocxDocument(io.BytesIO(file_bytes))
+                    extracted = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+                else:
+                    extracted = "[python-docx not installed — Word file received but cannot extract]"
+
+            # Plain text / CSV
+            elif "text" in content_type:
+                file_type = "txt"
+                extracted = file_bytes.decode("utf-8", errors="replace")
+
+            # Image
+            elif "image" in content_type:
+                file_type = "image"
+                # Save image to disk for Claude Code to read
+                img_ext = content_type.split("/")[-1].split(";")[0]
+                img_name = f"wa_image_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{img_ext}"
+                img_path = os.path.join(TRANSCRIPTIONS_DIR, img_name)
+                with open(img_path, "wb") as f:
+                    f.write(file_bytes)
+                extracted = f"[Imagen guardada: {img_name}]"
+
+            # Other file — save raw
+            else:
+                file_type = content_type.split("/")[-1] if "/" in content_type else "file"
+                file_name = f"wa_file_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{file_type}"
+                file_path = os.path.join(TRANSCRIPTIONS_DIR, file_name)
+                with open(file_path, "wb") as f:
+                    f.write(file_bytes)
+                extracted = f"[Archivo guardado: {file_name}]"
+
+            if extracted:
+                # Save to latest.txt with file content
+                save_transcription(f"[FILE:{file_type}] {extracted[:5000]}", source="whatsapp-file")
+                # Also save full content in a separate file
+                doc_name = f"wa_doc_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+                doc_path = os.path.join(TRANSCRIPTIONS_DIR, doc_name)
+                with open(doc_path, "w", encoding="utf-8") as f:
+                    f.write(extracted)
+                response_text = f"Archivo {file_type} recibido ({len(extracted)} chars). Guardado como {doc_name}"
+                logger.info("WhatsApp file processed: type=%s, chars=%d", file_type, len(extracted))
+            else:
+                response_text = f"Archivo {file_type} recibido pero no se pudo extraer contenido."
+
+        except Exception as e:
+            logger.error("WhatsApp file error: %s", e)
+            response_text = f"Error procesando archivo: {e}"
 
     else:
         response_text = "Envia una nota de voz o texto para transcribir."
