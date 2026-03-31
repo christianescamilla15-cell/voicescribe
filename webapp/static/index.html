@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0F172A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>VoiceScribe</title>
+<link rel="manifest" href="/manifest.json">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0F172A; color: #F1F5F9;
+  min-height: 100vh; min-height: 100dvh;
+  display: flex; flex-direction: column;
+}
+.header {
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #0F172A, #1E40AF);
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.header h1 { font-size: 22px; font-weight: 700; }
+.header p { font-size: 13px; color: #93C5FD; margin-top: 2px; }
+
+.controls {
+  padding: 16px 20px;
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+}
+.controls select, .controls input {
+  padding: 8px 12px; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: #1E293B; color: #F1F5F9; font-size: 14px;
+}
+.controls input { flex: 1; min-width: 120px; }
+
+.btn {
+  padding: 12px 24px; border-radius: 12px; border: none;
+  font-size: 16px; font-weight: 600; cursor: pointer;
+  transition: all 0.2s; display: flex; align-items: center; gap: 8px;
+}
+.btn-record { background: #EF4444; color: white; }
+.btn-record.active { background: #22C55E; animation: pulse 1.5s infinite; }
+.btn-stop { background: #6B7280; color: white; }
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+  50% { box-shadow: 0 0 0 12px rgba(34,197,94,0); }
+}
+
+.status {
+  padding: 8px 20px; font-size: 13px; color: #94A3B8;
+  display: flex; justify-content: space-between;
+}
+.status .live { color: #22C55E; font-weight: 600; }
+
+.transcript {
+  flex: 1; overflow-y: auto; padding: 12px 20px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.line {
+  padding: 10px 14px; border-radius: 10px; font-size: 15px; line-height: 1.5;
+  max-width: 85%; word-wrap: break-word;
+}
+.line.you {
+  background: #1E40AF; align-self: flex-end; border-bottom-right-radius: 4px;
+}
+.line.them {
+  background: #334155; align-self: flex-start; border-bottom-left-radius: 4px;
+}
+.line.phone {
+  background: #7C3AED; align-self: flex-start; border-bottom-left-radius: 4px;
+}
+.line .meta {
+  font-size: 11px; color: rgba(255,255,255,0.5); margin-top: 4px;
+}
+
+.bottom-bar {
+  padding: 12px 20px; background: #1E293B;
+  border-top: 1px solid rgba(255,255,255,0.1);
+  display: flex; justify-content: center; gap: 12px;
+}
+
+.empty {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: #475569; font-size: 16px; text-align: center; padding: 40px;
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>VoiceScribe</h1>
+  <p id="sessionInfo">Session: default</p>
+</div>
+
+<div class="controls">
+  <select id="langSelect">
+    <option value="es">Espanol</option>
+    <option value="en">English</option>
+  </select>
+  <select id="sourceSelect">
+    <option value="mic">Microfono</option>
+    <option value="them">Otro lado</option>
+    <option value="phone">Celular</option>
+  </select>
+  <input id="sessionInput" placeholder="Session ID..." value="default">
+</div>
+
+<div class="status">
+  <span id="statusText">Listo para grabar</span>
+  <span id="liveIndicator"></span>
+</div>
+
+<div class="transcript" id="transcript">
+  <div class="empty">Presiona grabar para comenzar la transcripcion en tiempo real</div>
+</div>
+
+<div class="bottom-bar">
+  <button class="btn btn-record" id="recordBtn" onclick="toggleRecording()">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>
+    Grabar
+  </button>
+  <button class="btn btn-stop" onclick="clearTranscript()">Limpiar</button>
+</div>
+
+<script>
+const API_BASE = location.origin;
+let recording = false;
+let mediaRecorder = null;
+let ws = null;
+let chunks = [];
+let chunkInterval = null;
+
+function getSessionId() {
+  return document.getElementById('sessionInput').value || 'default';
+}
+
+function toggleRecording() {
+  if (recording) stopRecording();
+  else startRecording();
+}
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recording = true;
+
+    const btn = document.getElementById('recordBtn');
+    btn.classList.add('active');
+    btn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg> Grabando...';
+
+    document.getElementById('statusText').textContent = 'Grabando...';
+    document.getElementById('liveIndicator').innerHTML = '<span class="live">LIVE</span>';
+    document.getElementById('sessionInfo').textContent = 'Session: ' + getSessionId();
+
+    // Connect WebSocket
+    const wsUrl = API_BASE.replace('http', 'ws') + '/ws/' + getSessionId();
+    ws = new WebSocket(wsUrl);
+    ws.onmessage = (e) => {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'transcription') {
+        addLine(msg.text, msg.source, msg.timestamp);
+      }
+    };
+    ws.onclose = () => {
+      if (recording) {
+        document.getElementById('statusText').textContent = 'WebSocket reconectando...';
+      }
+    };
+
+    // Use AudioContext to capture raw PCM and convert to WAV
+    const audioCtx = new AudioContext({ sampleRate: 16000 });
+    const source_node = audioCtx.createMediaStreamSource(stream);
+    const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+    let audioBuffer = [];
+
+    processor.onaudioprocess = (e) => {
+      const data = e.inputBuffer.getChannelData(0);
+      audioBuffer.push(new Float32Array(data));
+    };
+    source_node.connect(processor);
+    processor.connect(audioCtx.destination);
+
+    // Every 5 seconds, convert buffer to WAV and send
+    chunkInterval = setInterval(async () => {
+      if (audioBuffer.length === 0) return;
+
+      // Merge chunks
+      const totalLen = audioBuffer.reduce((sum, b) => sum + b.length, 0);
+      const merged = new Float32Array(totalLen);
+      let offset = 0;
+      for (const b of audioBuffer) { merged.set(b, offset); offset += b.length; }
+      audioBuffer = [];
+
+      // Check silence (RMS)
+      let sum = 0;
+      for (let i = 0; i < merged.length; i++) sum += merged[i] * merged[i];
+      const rms = Math.sqrt(sum / merged.length);
+      if (rms < 0.01) return; // silence
+
+      // Convert to 16-bit PCM WAV
+      const wavBytes = encodeWAV(merged, 16000);
+
+      document.getElementById('statusText').textContent = 'Transcribiendo...';
+
+      const formData = new FormData();
+      formData.append('audio', new Blob([wavBytes], { type: 'audio/wav' }), 'chunk.wav');
+      formData.append('language', document.getElementById('langSelect').value);
+      formData.append('source', document.getElementById('sourceSelect').value);
+      formData.append('session_id', getSessionId());
+
+      try {
+        const res = await fetch(API_BASE + '/api/transcribe', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.text) {
+          document.getElementById('statusText').textContent = 'Grabando...';
+        }
+      } catch (err) {
+        console.error('Transcribe error:', err);
+      }
+    }, 5000);
+
+    // Store refs for cleanup
+    window._audioCtx = audioCtx;
+    window._processor = processor;
+    window._sourceNode = source_node;
+
+  } catch (err) {
+    alert('Error accessing microphone: ' + err.message);
+  }
+}
+
+function encodeWAV(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  function writeStr(offset, str) { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); }
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return buffer;
+}
+
+function stopRecording() {
+  recording = false;
+
+  if (chunkInterval) clearInterval(chunkInterval);
+  if (window._processor) { window._processor.disconnect(); window._processor = null; }
+  if (window._sourceNode) { window._sourceNode.disconnect(); window._sourceNode = null; }
+  if (window._audioCtx) { window._audioCtx.close(); window._audioCtx = null; }
+  if (ws) ws.close();
+
+  const btn = document.getElementById('recordBtn');
+  btn.classList.remove('active');
+  btn.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg> Grabar';
+
+  document.getElementById('statusText').textContent = 'Detenido';
+  document.getElementById('liveIndicator').innerHTML = '';
+}
+
+function addLine(text, source, timestamp) {
+  const container = document.getElementById('transcript');
+  // Remove empty state
+  const empty = container.querySelector('.empty');
+  if (empty) empty.remove();
+
+  const div = document.createElement('div');
+  div.className = 'line ' + (source || 'mic');
+
+  const time = timestamp ? new Date(timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
+  const label = source === 'you' || source === 'mic' ? 'Tu' : source === 'them' ? 'Otro' : 'Cel';
+
+  div.innerHTML = text + '<div class="meta">' + label + ' — ' + time + '</div>';
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function clearTranscript() {
+  const container = document.getElementById('transcript');
+  container.innerHTML = '<div class="empty">Presiona grabar para comenzar</div>';
+}
+
+// Load existing session on connect
+async function loadSession() {
+  try {
+    const res = await fetch(API_BASE + '/api/sessions/' + getSessionId());
+    const data = await res.json();
+    if (data.lines && data.lines.length > 0) {
+      const container = document.getElementById('transcript');
+      const empty = container.querySelector('.empty');
+      if (empty) empty.remove();
+      data.lines.forEach(l => addLine(l.text, l.source, l.timestamp));
+    }
+  } catch (e) {}
+}
+
+document.getElementById('sessionInput').addEventListener('change', loadSession);
+</script>
+</body>
+</html>

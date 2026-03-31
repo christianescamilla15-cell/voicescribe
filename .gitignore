@@ -1,0 +1,6 @@
+transcriptions/
+*.pem
+__pycache__/
+*.pyc
+server.log
+.env
